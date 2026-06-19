@@ -18,7 +18,6 @@ textarea::placeholder, input::placeholder { color: rgba(242,237,228,0.3); }
 
 @keyframes studio-spin { to { transform: rotate(360deg); } }
 @keyframes pulse-save { 0%, 100% { opacity: 0.4; } 50% { opacity: 1; } }
-@keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
 
 ::-webkit-scrollbar { height: 8px; width: 8px; }
 ::-webkit-scrollbar-track { background: rgba(242,237,228,0.04); }
@@ -26,41 +25,18 @@ textarea::placeholder, input::placeholder { color: rgba(242,237,228,0.3); }
 ::-webkit-scrollbar-thumb:hover { background: rgba(242,237,228,0.25); }
 
 .save-indicator { animation: pulse-save 1.2s ease-in-out; font-size: 10px; color: rgba(138,154,126,0.8); }
-.slide-in-panel { animation: slideIn 0.25s ease-out; }
-
 </style>
 </head>
 <body>
 <div id="root"></div>
-<script type="text/babel" data-presets="react">
-const { useState, useEffect, useRef, useCallback } = React;
+<script type="text/babel">
+const { useState, useEffect, useRef } = React;
 
-// ---------- Constants ----------
+// Constants
 const CHANNELS = {
-  instagram: {
-    key: "instagram",
-    label: "Instagram",
-    short: "IG",
-    color: "#ff2d8e",
-    dim: "rgba(255,45,142,0.12)",
-    desc: "Fast, visual, of-the-moment",
-  },
-  patreon: {
-    key: "patreon",
-    label: "Patreon",
-    short: "PAT",
-    color: "#c8432a",
-    dim: "rgba(200,67,42,0.14)",
-    desc: "Behind-the-scenes, process, intimacy",
-  },
-  substack: {
-    key: "substack",
-    label: "Substack",
-    short: "SUB",
-    color: "#8a9a7e",
-    dim: "rgba(138,154,126,0.16)",
-    desc: "Slow, written, considered",
-  },
+  instagram: { key: "instagram", label: "Instagram", short: "IG", color: "#ff2d8e", dim: "rgba(255,45,142,0.12)", desc: "Fast, visual, of-the-moment" },
+  patreon: { key: "patreon", label: "Patreon", short: "PAT", color: "#c8432a", dim: "rgba(200,67,42,0.14)", desc: "Behind-the-scenes, process, intimacy" },
+  substack: { key: "substack", label: "Substack", short: "SUB", color: "#8a9a7e", dim: "rgba(138,154,126,0.16)", desc: "Slow, written, considered" },
 };
 
 const STAGE_LABEL = { frame: "Negative", draft: "Proof", ready: "Print" };
@@ -73,40 +49,24 @@ const INK = "#1a1612";
 const SERIF = "'Fraunces', Georgia, serif";
 const MONO = "'Space Mono', 'Courier New', monospace";
 
-// ---------- Claude API helper with key management ----------
+// Claude API Helper
 async function callClaude(messages, system, maxTokens = 1200) {
   const apiKey = typeof window !== "undefined" && window.localStorage ? window.localStorage.getItem(API_KEY_KEY) : null;
-  if (!apiKey) {
-    throw new Error("API key not configured. Click ⚙ Settings to add your Claude API key.");
-  }
+  if (!apiKey) throw new Error("API key not configured. Click ⚙ to add your Claude API key.");
   
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
-    headers: { 
-      "Content-Type": "application/json",
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
-    },
-    body: JSON.stringify({
-      model: "claude-3-5-sonnet-20241022",
-      max_tokens: maxTokens,
-      system,
-      messages,
-    }),
+    headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
+    body: JSON.stringify({ model: "claude-3-5-sonnet-20241022", max_tokens: maxTokens, system, messages }),
   });
   if (!res.ok) {
-    const errText = await res.text().catch(() => "");
     let msg = "API error " + res.status;
-    if (res.status === 401) msg = "Invalid API key. Check ⚙ Settings.";
+    if (res.status === 401) msg = "Invalid API key.";
     else if (res.status === 429) msg = "Rate limited. Wait a moment.";
-    else if (res.status >= 500) msg = "Anthropic API error. Try again soon.";
     throw new Error(msg);
   }
   const data = await res.json();
-  const text = (data.content || [])
-    .filter((b) => b.type === "text")
-    .map((b) => b.text)
-    .join("\n");
+  const text = (data.content || []).filter((b) => b.type === "text").map((b) => b.text).join("\n");
   if (!text.trim()) throw new Error("Empty response from model");
   return text;
 }
@@ -116,98 +76,37 @@ function extractJSON(text) {
   t = t.replace(/^```json\s*/i, "").replace(/^```\s*/, "").replace(/```\s*$/, "");
   const candidates = [t.indexOf("["), t.indexOf("{")].filter((i) => i >= 0);
   const start = candidates.length ? Math.min(...candidates) : -1;
-  const lastArr = t.lastIndexOf("]");
-  const lastObj = t.lastIndexOf("}");
-  const end = Math.max(lastArr, lastObj);
+  const end = Math.max(t.lastIndexOf("]"), t.lastIndexOf("}"));
   if (start >= 0 && end >= 0) t = t.slice(start, end + 1);
   const parsed = JSON.parse(t);
   return Array.isArray(parsed) ? parsed : [parsed];
 }
 
-function safeChannel(ch) {
-  return CHANNELS[ch] ? ch : "instagram";
-}
+function safeChannel(ch) { return CHANNELS[ch] ? ch : "instagram"; }
+function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 8); }
 
-// ---------- Storage helpers with localStorage ----------
+// Storage
 async function loadIdeas() {
   if (typeof localStorage === "undefined") return [];
-  try {
-    const data = localStorage.getItem(STORAGE_KEY);
-    return data ? JSON.parse(data) : [];
-  } catch (e) {
-    console.error("Failed to load ideas:", e);
-    return [];
-  }
+  try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]"); } catch (e) { return []; }
 }
-
 async function saveIdeas(ideas) {
   if (typeof localStorage === "undefined") return;
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(ideas));
-  } catch (e) {
-    console.error("Failed to save ideas:", e);
-  }
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(ideas)); } catch (e) {}
 }
-
 async function loadVisions() {
   const fallback = { instagram: "", patreon: "", substack: "" };
   if (typeof localStorage === "undefined") return fallback;
-  try {
-    const data = localStorage.getItem(VISION_KEY);
-    return data ? { ...fallback, ...JSON.parse(data) } : fallback;
-  } catch (e) {
-    return fallback;
-  }
+  try { return { ...fallback, ...JSON.parse(localStorage.getItem(VISION_KEY) || "{}") }; } catch (e) { return fallback; }
 }
-
 async function saveVisions(v) {
   if (typeof localStorage === "undefined") return;
-  try {
-    localStorage.setItem(VISION_KEY, JSON.stringify(v));
-  } catch (e) {
-    console.error("Failed to save visions:", e);
-  }
+  try { localStorage.setItem(VISION_KEY, JSON.stringify(v)); } catch (e) {}
 }
 
-async function loadActiveId() {
-  if (typeof localStorage === "undefined") return null;
-  try {
-    return localStorage.getItem(ACTIVE_KEY);
-  } catch (e) {
-    return null;
-  }
-}
-
-async function saveActiveId(id) {
-  if (typeof localStorage === "undefined") return;
-  try {
-    if (id) localStorage.setItem(ACTIVE_KEY, id);
-    else localStorage.removeItem(ACTIVE_KEY);
-  } catch (e) {
-    console.error("Failed to save active id:", e);
-  }
-}
-
-function uid() {
-  return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-}
-
-// ---------- Small UI atoms ----------
+// UI Components
 function Spinner({ color = "#ff2d8e", size = 14 }) {
-  return (
-    <span
-      style={{
-        display: "inline-block",
-        width: size,
-        height: size,
-        borderRadius: "50%",
-        border: `2px solid ${color}`,
-        borderTopColor: "transparent",
-        animation: "studio-spin 0.7s linear infinite",
-        flexShrink: 0,
-      }}
-    />
-  );
+  return <span style={{ display: "inline-block", width: size, height: size, borderRadius: "50%", border: `2px solid ${color}`, borderTopColor: "transparent", animation: "studio-spin 0.7s linear infinite", flexShrink: 0 }} />;
 }
 
 function SaveIndicator() {
@@ -217,40 +116,9 @@ function SaveIndicator() {
 function ErrorNote({ message, onDismiss }) {
   if (!message) return null;
   return (
-    <div
-      style={{
-        border: "1px solid rgba(200,67,42,0.5)",
-        background: "rgba(200,67,42,0.1)",
-        color: "#e8a08f",
-        fontFamily: MONO,
-        fontSize: 11,
-        padding: "8px 10px",
-        marginTop: 8,
-        display: "flex",
-        justifyContent: "space-between",
-        alignItems: "flex-start",
-        gap: 8,
-        lineHeight: 1.5,
-      }}
-    >
+    <div style={{ border: "1px solid rgba(200,67,42,0.5)", background: "rgba(200,67,42,0.1)", color: "#e8a08f", fontFamily: MONO, fontSize: 11, padding: "8px 10px", marginTop: 8, display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8, lineHeight: 1.5 }}>
       <span>{message}</span>
-      {onDismiss && (
-        <button
-          onClick={onDismiss}
-          style={{
-            background: "none",
-            border: "none",
-            color: "#e8a08f",
-            cursor: "pointer",
-            fontFamily: MONO,
-            fontSize: 11,
-            padding: 0,
-            flexShrink: 0,
-          }}
-        >
-          ✕
-        </button>
-      )}
+      {onDismiss && <button onClick={onDismiss} style={{ background: "none", border: "none", color: "#e8a08f", cursor: "pointer", fontFamily: MONO, fontSize: 11, padding: 0, flexShrink: 0 }}>✕</button>}
     </div>
   );
 }
@@ -258,58 +126,19 @@ function ErrorNote({ message, onDismiss }) {
 function ChannelPill({ channel, active, onClick }) {
   const c = CHANNELS[channel];
   return (
-    <button
-      onClick={onClick}
-      style={{
-        padding: "6px 12px",
-        fontSize: 11,
-        letterSpacing: "0.12em",
-        textTransform: "uppercase",
-        fontFamily: MONO,
-        border: `1px solid ${active ? c.color : "rgba(242,237,228,0.18)"}`,
-        background: active ? c.dim : "transparent",
-        color: active ? c.color : "rgba(242,237,228,0.55)",
-        cursor: "pointer",
-        transition: "all 0.15s ease",
-        whiteSpace: "nowrap",
-      }}
-    >
+    <button onClick={onClick} style={{ padding: "6px 12px", fontSize: 11, letterSpacing: "0.12em", textTransform: "uppercase", fontFamily: MONO, border: `1px solid ${active ? c.color : "rgba(242,237,228,0.18)"}`, background: active ? c.dim : "transparent", color: active ? c.color : "rgba(242,237,228,0.55)", cursor: "pointer", transition: "all 0.15s ease", whiteSpace: "nowrap" }}>
       {c.short} · {c.label}
     </button>
   );
 }
 
-const btnBase = {
-  fontFamily: MONO,
-  fontSize: 11,
-  textTransform: "uppercase",
-  letterSpacing: "0.08em",
-  cursor: "pointer",
-  display: "inline-flex",
-  alignItems: "center",
-  gap: 8,
-  padding: "9px 14px",
-  border: "1px solid transparent",
-  transition: "opacity 0.15s ease",
-};
+const btnBase = { fontFamily: MONO, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.08em", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 8, padding: "9px 14px", border: "1px solid transparent", transition: "opacity 0.15s ease" };
 
 function fieldStyle(extra) {
-  return {
-    width: "100%",
-    background: "transparent",
-    border: "1px solid rgba(242,237,228,0.15)",
-    color: PAPER,
-    padding: "10px 12px",
-    fontSize: 13,
-    lineHeight: 1.6,
-    resize: "none",
-    outline: "none",
-    boxSizing: "border-box",
-    ...extra,
-  };
+  return { width: "100%", background: "transparent", border: "1px solid rgba(242,237,228,0.15)", color: PAPER, padding: "10px 12px", fontSize: 13, lineHeight: 1.6, resize: "none", outline: "none", boxSizing: "border-box", ...extra };
 }
 
-// ---------- API Key Settings Modal ----------
+// API Key Modal
 function ApiKeyModal({ onClose, onSet }) {
   const [key, setKey] = useState("");
   const [masked, setMasked] = useState("");
@@ -319,22 +148,13 @@ function ApiKeyModal({ onClose, onSet }) {
   useEffect(() => {
     if (typeof localStorage !== "undefined") {
       const stored = localStorage.getItem(API_KEY_KEY);
-      if (stored) {
-        setMasked(stored.slice(0, 10) + "..." + stored.slice(-4));
-        setSuccess(true);
-      }
+      if (stored) { setMasked(stored.slice(0, 10) + "..." + stored.slice(-4)); setSuccess(true); }
     }
   }, []);
 
   function handleSet() {
-    if (!key.trim()) {
-      setError("Please enter an API key");
-      return;
-    }
-    if (key.length < 20) {
-      setError("API key seems too short");
-      return;
-    }
+    if (!key.trim()) { setError("Please enter an API key"); return; }
+    if (key.length < 20) { setError("API key seems too short"); return; }
     if (typeof localStorage !== "undefined") {
       localStorage.setItem(API_KEY_KEY, key);
       setKey("");
@@ -347,136 +167,25 @@ function ApiKeyModal({ onClose, onSet }) {
   }
 
   return (
-    <div
-      style={{
-        position: "fixed",
-        inset: 0,
-        zIndex: 100,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        background: "rgba(0,0,0,0.8)",
-        backdropFilter: "blur(4px)",
-        padding: 16,
-      }}
-      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
-    >
-      <div
-        style={{
-          width: "100%",
-          maxWidth: 500,
-          background: INK,
-          border: "1px solid rgba(242,237,228,0.15)",
-          padding: 24,
-        }}
-      >
-        <h2 style={{ fontFamily: SERIF, fontSize: 18, color: PAPER, margin: "0 0 12px" }}>
-          Claude API Key
-        </h2>
+    <div style={{ position: "fixed", inset: 0, zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.8)", backdropFilter: "blur(4px)", padding: 16 }} onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div style={{ width: "100%", maxWidth: 500, background: INK, border: "1px solid rgba(242,237,228,0.15)", padding: 24 }}>
+        <h2 style={{ fontFamily: SERIF, fontSize: 18, color: PAPER, margin: "0 0 12px" }}>Claude API Key</h2>
         <p style={{ fontFamily: MONO, fontSize: 11, color: "rgba(242,237,228,0.6)", marginBottom: 12, lineHeight: 1.6 }}>
-          Get your key from <a href="https://console.anthropic.com/account/keys" target="_blank" rel="noopener noreferrer" style={{ color: "#ff2d8e", textDecoration: "none" }}>console.anthropic.com/account/keys</a>.
-          <br />
-          Your key is stored locally only—never sent anywhere else.
+          Get your key from <a href="https://console.anthropic.com/account/keys" target="_blank" rel="noopener noreferrer" style={{ color: "#ff2d8e", textDecoration: "none" }}>console.anthropic.com</a>. Your key is stored locally only.
         </p>
-        {success && (
-          <div style={{ background: "rgba(138,154,126,0.1)", border: "1px solid rgba(138,154,126,0.3)", color: "#8a9a7e", fontFamily: MONO, fontSize: 11, padding: "8px 10px", marginBottom: 12, borderRadius: "2px" }}>
-            ✓ API key configured: {masked}
-          </div>
-        )}
-        {!success && (
-          <input
-            type="password"
-            value={key}
-            onChange={(e) => {
-              setKey(e.target.value);
-              setError("");
-            }}
-            onKeyDown={(e) => e.key === "Enter" && handleSet()}
-            placeholder="sk-ant-..."
-            style={{
-              ...fieldStyle({}),
-              marginBottom: 12,
-              fontFamily: MONO,
-              fontSize: 12,
-            }}
-            autoFocus
-          />
-        )}
+        {success && <div style={{ background: "rgba(138,154,126,0.1)", border: "1px solid rgba(138,154,126,0.3)", color: "#8a9a7e", fontFamily: MONO, fontSize: 11, padding: "8px 10px", marginBottom: 12 }}>✓ Configured: {masked}</div>}
+        {!success && <input type="password" value={key} onChange={(e) => { setKey(e.target.value); setError(""); }} onKeyDown={(e) => e.key === "Enter" && handleSet()} placeholder="sk-ant-..." style={{ ...fieldStyle({}), marginBottom: 12, fontFamily: MONO, fontSize: 12 }} autoFocus />}
         {error && <ErrorNote message={error} onDismiss={() => setError("")} />}
         <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
-          <button
-            onClick={onClose}
-            style={{ ...btnBase, border: "1px solid rgba(242,237,228,0.25)", color: PAPER, background: "transparent" }}
-          >
-            Close
-          </button>
-          {!success && (
-            <button
-              onClick={handleSet}
-              style={{ ...btnBase, background: "#ff2d8e", color: INK }}
-            >
-              Save Key
-            </button>
-          )}
+          <button onClick={onClose} style={{ ...btnBase, border: "1px solid rgba(242,237,228,0.25)", color: PAPER, background: "transparent" }}>Close</button>
+          {!success && <button onClick={handleSet} style={{ ...btnBase, background: "#ff2d8e", color: INK }}>Save Key</button>}
         </div>
       </div>
     </div>
   );
 }
 
-// ---------- Keyboard Shortcuts Help ----------
-function ShortcutsHelp({ onClose }) {
-  return (
-    <div
-      style={{
-        position: "fixed",
-        inset: 0,
-        zIndex: 99,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        background: "rgba(0,0,0,0.7)",
-        backdropFilter: "blur(4px)",
-        padding: 16,
-      }}
-      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
-    >
-      <div
-        style={{
-          width: "100%",
-          maxWidth: 420,
-          background: INK,
-          border: "1px solid rgba(242,237,228,0.15)",
-          padding: 24,
-          maxHeight: "80vh",
-          overflowY: "auto",
-        }}
-      >
-        <h2 style={{ fontFamily: SERIF, fontSize: 18, color: PAPER, margin: "0 0 16px" }}>
-          Keyboard Shortcuts
-        </h2>
-        <div style={{ fontFamily: MONO, fontSize: 11, color: "rgba(242,237,228,0.7)", lineHeight: 2 }}>
-          <div><strong style={{ color: "#ff2d8e" }}>Cmd/Ctrl + Shift + D</strong> — Focus brain dump</div>
-          <div><strong style={{ color: "#ff2d8e" }}>Cmd/Ctrl + Enter</strong> — Send brain dump</div>
-          <div><strong style={{ color: "#ff2d8e" }}>Escape</strong> — Close panel/modals</div>
-          <div><strong style={{ color: "#ff2d8e" }}>Cmd/Ctrl + K</strong> — Draft idea</div>
-          <div><strong style={{ color: "#ff2d8e" }}>Cmd/Ctrl + S</strong> — Mark ready</div>
-          <div><strong style={{ color: "#ff2d8e" }}>Cmd/Ctrl + ?</strong> — Show this menu</div>
-          <div><strong style={{ color: "#ff2d8e" }}>1, 2, 3, 4</strong> — Filter by channel</div>
-          <div style={{ marginTop: 8, color: "rgba(242,237,228,0.5)", fontSize: 10 }}>💡 All changes auto-save instantly</div>
-        </div>
-        <button
-          onClick={onClose}
-          style={{ ...btnBase, background: "#ff2d8e", color: INK, marginTop: 20 }}
-        >
-          Got it
-        </button>
-      </div>
-    </div>
-  );
-}
-
-// ---------- Vision Room ----------
+// Vision Room
 function VisionRoom({ visions, setVisions, onClose }) {
   const [local, setLocal] = useState(visions);
   const [busy, setBusy] = useState(null);
@@ -489,132 +198,38 @@ function VisionRoom({ visions, setVisions, onClose }) {
     setError("");
     const c = CHANNELS[channelKey];
     try {
-      const text = await callClaude(
-        [
-          {
-            role: "user",
-            content: `Kali is a London analogue photographer & experimental filmmaker (brand: "Queen of the Grain") working with 35mm, darkroom printing, film souping, expired stock. She also runs a creative operations consulting practice. She's ADHD, direct, sensory-focused, no filter. For the ${c.label} channel (${c.desc}), write a concise vision statement: what goes here, tone, audience, what she won't post. 2-3 sentences max. Be specific to her voice and brand.`,
-          },
-        ],
-        "You are a sharp creative strategist who writes vision statements in a direct, specific, slightly literary voice. No marketing fluff. Write for an ADHD creative.",
-        400
-      );
+      const text = await callClaude([{ role: "user", content: `Kali is a London analogue photographer (Queen of the Grain). Write a 1-2 sentence vision statement for ${c.label}: ${c.desc}` }], "You write sharp, specific vision statements. No marketing speak.", 300);
       const updated = { ...local, [channelKey]: text.trim() };
       setLocal(updated);
       setVisions(updated);
       saveVisions(updated);
     } catch (e) {
-      setError("Couldn't generate a suggestion (" + e.message + ")");
+      setError(e.message);
     }
     setBusy(null);
   }
 
-  function update(channelKey, val) {
-    setLocal((prev) => ({ ...prev, [channelKey]: val }));
-  }
-
-  function commit() {
-    setVisions(local);
-    saveVisions(local);
-    onClose();
-  }
-
   return (
-    <div
-      style={{
-        position: "fixed",
-        inset: 0,
-        zIndex: 50,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        background: "rgba(0,0,0,0.7)",
-        backdropFilter: "blur(4px)",
-        padding: 16,
-      }}
-      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
-    >
-      <div
-        style={{
-          width: "100%",
-          maxWidth: 640,
-          maxHeight: "92vh",
-          overflowY: "auto",
-          background: INK,
-          border: "1px solid rgba(242,237,228,0.15)",
-        }}
-      >
-        <div
-          style={{
-            position: "sticky",
-            top: 0,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            gap: 12,
-            padding: "16px 20px",
-            borderBottom: "1px solid rgba(242,237,228,0.12)",
-            background: INK,
-          }}
-        >
-          <div>
-            <div style={{ fontFamily: MONO, fontSize: 10, letterSpacing: "0.2em", textTransform: "uppercase", color: "rgba(242,237,228,0.4)" }}>
-              Light Table
-            </div>
-            <h2 style={{ fontFamily: SERIF, fontSize: 20, color: PAPER, margin: "2px 0 0" }}>Vision &amp; tone, per channel</h2>
-          </div>
-          <button
-            onClick={commit}
-            style={{ ...btnBase, background: "#ff2d8e", color: INK, flexShrink: 0 }}
-          >
-            Done
-          </button>
+    <div style={{ position: "fixed", inset: 0, zIndex: 50, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.7)", backdropFilter: "blur(4px)", padding: 16 }} onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div style={{ width: "100%", maxWidth: 640, maxHeight: "92vh", overflowY: "auto", background: INK, border: "1px solid rgba(242,237,228,0.15)" }}>
+        <div style={{ position: "sticky", top: 0, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "16px 20px", borderBottom: "1px solid rgba(242,237,228,0.12)", background: INK }}>
+          <div><div style={{ fontFamily: MONO, fontSize: 10, letterSpacing: "0.2em", textTransform: "uppercase", color: "rgba(242,237,228,0.4)" }}>Light Table</div><h2 style={{ fontFamily: SERIF, fontSize: 20, color: PAPER, margin: "2px 0 0" }}>Vision &amp; tone</h2></div>
+          <button onClick={() => { setVisions(local); saveVisions(local); onClose(); }} style={{ ...btnBase, background: "#ff2d8e", color: INK, flexShrink: 0 }}>Done</button>
         </div>
-
         <div style={{ padding: 20, display: "flex", flexDirection: "column", gap: 20 }}>
           {Object.values(CHANNELS).map((c) => (
             <div key={c.key} style={{ border: "1px solid rgba(242,237,228,0.12)" }}>
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  gap: 8,
-                  padding: "10px 16px",
-                  background: c.dim,
-                  flexWrap: "wrap",
-                }}
-              >
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "10px 16px", background: c.dim, flexWrap: "wrap" }}>
                 <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
-                  <span style={{ fontFamily: MONO, fontSize: 11, letterSpacing: "0.15em", textTransform: "uppercase", color: c.color }}>
-                    {c.label}
-                  </span>
+                  <span style={{ fontFamily: MONO, fontSize: 11, letterSpacing: "0.15em", textTransform: "uppercase", color: c.color }}>{c.label}</span>
                   <span style={{ fontSize: 11, color: "rgba(242,237,228,0.45)", fontFamily: MONO }}>{c.desc}</span>
                 </div>
-                <button
-                  onClick={() => suggestVision(c.key)}
-                  disabled={busy === c.key}
-                  style={{
-                    ...btnBase,
-                    fontSize: 10,
-                    padding: "5px 10px",
-                    border: `1px solid ${c.color}`,
-                    color: c.color,
-                    background: "transparent",
-                    opacity: busy === c.key ? 0.6 : 1,
-                  }}
-                >
+                <button onClick={() => suggestVision(c.key)} disabled={busy === c.key} style={{ ...btnBase, fontSize: 10, padding: "5px 10px", border: `1px solid ${c.color}`, color: c.color, background: "transparent", opacity: busy === c.key ? 0.6 : 1 }}>
                   {busy === c.key ? <Spinner color={c.color} size={11} /> : null}
                   {busy === c.key ? "writing" : "suggest"}
                 </button>
               </div>
-              <textarea
-                value={local[c.key] || ""}
-                onChange={(e) => update(c.key, e.target.value)}
-                placeholder={`What is ${c.label} for? Tone, pace, what you won't post here...`}
-                rows={4}
-                style={fieldStyle({ border: "none", fontFamily: SERIF, fontSize: 14, padding: "12px 16px" })}
-              />
+              <textarea value={local[c.key] || ""} onChange={(e) => setLocal((prev) => ({ ...prev, [c.key]: e.target.value }))} placeholder={`What is ${c.label} for?`} rows={3} style={fieldStyle({ border: "none", fontFamily: SERIF, fontSize: 14, padding: "12px 16px" })} />
             </div>
           ))}
           <ErrorNote message={error} onDismiss={() => setError("")} />
@@ -624,85 +239,60 @@ function VisionRoom({ visions, setVisions, onClose }) {
   );
 }
 
-// ---------- Idea Frame (contact sheet cell) ----------
+// Idea Frame
 function IdeaFrame({ idea, onOpen, isActive }) {
   const c = CHANNELS[safeChannel(idea.channel)];
   const [hover, setHover] = useState(false);
   return (
-    <button
-      onClick={onOpen}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
-      style={{
-        position: "relative",
-        flexShrink: 0,
-        width: 150,
-        height: 190,
-        textAlign: "left",
-        padding: "12px 12px 12px 18px",
-        display: "flex",
-        flexDirection: "column",
-        justifyContent: "space-between",
-        cursor: "pointer",
-        transform: hover ? "translateY(-2px)" : "none",
-        transition: "transform 0.15s ease",
-        border: `1px solid ${isActive ? c.color : "rgba(242,237,228,0.18)"}`,
-        background: isActive ? c.dim : "rgba(242,237,228,0.03)",
-        fontFamily: "inherit",
-      }}
-    >
+    <button onClick={onOpen} onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)} style={{ position: "relative", flexShrink: 0, width: 150, height: 190, textAlign: "left", padding: "12px 12px 12px 18px", display: "flex", flexDirection: "column", justifyContent: "space-between", cursor: "pointer", transform: hover ? "translateY(-2px)" : "none", transition: "transform 0.15s ease", border: `1px solid ${isActive ? c.color : "rgba(242,237,228,0.18)"}`, background: isActive ? c.dim : "rgba(242,237,228,0.03)", fontFamily: "inherit" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <span style={{ fontFamily: MONO, fontSize: 9, letterSpacing: "0.15em", textTransform: "uppercase", color: c.color }}>
-          {c.short}
-        </span>
-        <span style={{ fontFamily: MONO, fontSize: 9, textTransform: "uppercase", color: "rgba(242,237,228,0.35)" }}>
-          {STAGE_LABEL[idea.stage] || "Negative"}
-        </span>
+        <span style={{ fontFamily: MONO, fontSize: 9, letterSpacing: "0.15em", textTransform: "uppercase", color: c.color }}>{c.short}</span>
+        <span style={{ fontFamily: MONO, fontSize: 9, textTransform: "uppercase", color: "rgba(242,237,228,0.35)" }}>{STAGE_LABEL[idea.stage] || "Negative"}</span>
       </div>
-      <div
-        style={{
-          fontFamily: SERIF,
-          fontSize: 13,
-          lineHeight: 1.35,
-          color: PAPER,
-          display: "-webkit-box",
-          WebkitLineClamp: 5,
-          WebkitBoxOrient: "vertical",
-          overflow: "hidden",
-        }}
-      >
-        {idea.title || idea.raw}
-      </div>
-      <div style={{ fontFamily: MONO, fontSize: 9, color: "rgba(242,237,228,0.3)" }}>
-        #{String(idea.frameNo).padStart(3, "0")}
-      </div>
-      {/* sprocket holes */}
-      <div
-        style={{
-          position: "absolute",
-          left: -1,
-          top: 0,
-          bottom: 0,
-          width: 6,
-          display: "flex",
-          flexDirection: "column",
-          justifyContent: "space-evenly",
-          padding: "8px 0",
-        }}
-      >
-        {[0, 1, 2, 3].map((i) => (
-          <div key={i} style={{ width: 4, height: 4, borderRadius: 1, background: INK }} />
-        ))}
-      </div>
+      <div style={{ fontFamily: SERIF, fontSize: 13, lineHeight: 1.35, color: PAPER, display: "-webkit-box", WebkitLineClamp: 5, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{idea.title || idea.raw}</div>
+      <div style={{ fontFamily: MONO, fontSize: 9, color: "rgba(242,237,228,0.3)" }}>#{String(idea.frameNo).padStart(3, "0")}</div>
     </button>
   );
 }
 
-// ---------- Detail panel ----------
+// Brain Dump
+function BrainDump({ onAdd }) {
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  async function process() {
+    if (!text.trim()) return;
+    setBusy(true);
+    setError("");
+    try {
+      const out = await callClaude([{ role: "user", content: text }], "Split this brain dump into 2-5 distinct content ideas. Return JSON array: [{title, raw, channel}]", 800);
+      const arr = extractJSON(out);
+      if (!arr.length) throw new Error("No ideas found");
+      onAdd(arr);
+      setText("");
+    } catch (e) {
+      setError("Error: " + e.message);
+    }
+    setBusy(false);
+  }
+
+  return (
+    <div style={{ border: "1px solid rgba(255,45,142,0.3)", background: "rgba(255,45,142,0.04)", padding: 16 }}>
+      <div style={{ fontFamily: MONO, fontSize: 10, letterSpacing: "0.2em", textTransform: "uppercase", marginBottom: 8, color: "#ff2d8e" }}>Brain dump → frames</div>
+      <textarea value={text} onChange={(e) => setText(e.target.value)} placeholder="Dump everything. Ideas, half-thoughts, feelings..." rows={4} style={fieldStyle({ border: "none", fontFamily: SERIF, fontSize: 14, padding: 0, marginBottom: 12 })} />
+      <button onClick={process} disabled={busy || !text.trim()} style={{ ...btnBase, background: "#ff2d8e", color: INK, opacity: busy || !text.trim() ? 0.5 : 1, padding: "10px 16px" }}>
+        {busy && <Spinner color={INK} size={12} />}
+        {busy ? "Developing..." : "Develop into frames"}
+      </button>
+      <ErrorNote message={error} onDismiss={() => setError("")} />
+    </div>
+  );
+}
+
+// Idea Detail
 function IdeaDetail({ idea, onUpdate, onDelete, onSpawnMore, visions, onClose }) {
   const [draftBusy, setDraftBusy] = useState(false);
-  const [trendBusy, setTrendBusy] = useState(false);
-  const [moreBusy, setMoreBusy] = useState(false);
   const [editingDraft, setEditingDraft] = useState(idea.draft || "");
   const [elaborateNote, setElaborateNote] = useState("");
   const [elaborateBusy, setElaborateBusy] = useState(false);
@@ -716,25 +306,6 @@ function IdeaDetail({ idea, onUpdate, onDelete, onSpawnMore, visions, onClose })
     setError("");
   }, [idea.id]);
 
-  useEffect(() => {
-    const handleKeyDown = (e) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === "k") {
-        e.preventDefault();
-        generateDraft();
-      }
-      if ((e.metaKey || e.ctrlKey) && e.key === "s") {
-        e.preventDefault();
-        patch({ stage: idea.stage === "ready" ? "draft" : "ready" });
-      }
-      if (e.key === "Escape") {
-        e.preventDefault();
-        onClose();
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [idea, onClose]);
-
   function patch(fields) {
     onUpdate({ ...idea, ...fields });
     setSaved(true);
@@ -746,9 +317,8 @@ function IdeaDetail({ idea, onUpdate, onDelete, onSpawnMore, visions, onClose })
     setDraftBusy(true);
     setError("");
     try {
-      const sys = `You write Instagram captions, Patreon posts, and Substack newsletter copy for Kali, a London analogue photographer and experimental filmmaker (brand "Queen of the Grain") working with 35mm, darkroom printing, film souping, expired stock. She also runs creative operations consulting. She's ADHD, direct, sensory-focused, no filter or creator-speak. Keep her voice: specific, slightly irreverent, grounded. Output only the ready-to-edit post draft, no meta-commentary.`;
-      const visionNote = visions[idea.channel] ? `\n\nChannel vision/tone: ${visions[idea.channel]}` : "";
-      const userMsg = `Channel: ${c.label} (${c.desc})${visionNote}\n\nIdea: ${idea.raw}${idea.title ? `\nWorking title: ${idea.title}` : ""}\n\nWrite a ready-to-edit ${c.label} post draft. Keep it direct and specific. ${c.label === "Instagram" ? "Under 300 chars if possible. No hashtags unless essential." : c.label === "Patreon" ? "Behind-the-scenes, personal, intimate. 200-400 words." : "Conversational, considered, longer-form. 500-800 words."}`;
+      const sys = `You write ${c.label} copy for Kali (Queen of the Grain — analogue photographer). Keep it direct, sensory, authentic.`;
+      const userMsg = `Idea: ${idea.raw}${idea.title ? `\nTitle: ${idea.title}` : ""}\n\nWrite a ready-to-edit ${c.label} post.`;
       const text = await callClaude([{ role: "user", content: userMsg }], sys, 900);
       setEditingDraft(text.trim());
       patch({ draft: text.trim(), stage: "draft" });
@@ -763,8 +333,8 @@ function IdeaDetail({ idea, onUpdate, onDelete, onSpawnMore, visions, onClose })
     setElaborateBusy(true);
     setError("");
     try {
-      const sys = `You write/edit social and newsletter content for Kali (Queen of the Grain — analogue photography, darkroom, film souping). Keep her voice: direct, sensory, no creator-speak. Output just the revised draft, nothing else.`;
-      const userMsg = `Channel: ${c.label}\n\nCurrent draft:\n${editingDraft}\n\nRevision request: ${elaborateNote}\n\nReturn the full revised draft.`;
+      const sys = `You edit social and newsletter content. Keep Kali's voice: direct, sensory, authentic.`;
+      const userMsg = `Current draft:\n${editingDraft}\n\nRevision: ${elaborateNote}\n\nReturn full revised draft.`;
       const text = await callClaude([{ role: "user", content: userMsg }], sys, 900);
       setEditingDraft(text.trim());
       patch({ draft: text.trim() });
@@ -775,224 +345,51 @@ function IdeaDetail({ idea, onUpdate, onDelete, onSpawnMore, visions, onClose })
     setElaborateBusy(false);
   }
 
-  async function checkTrends() {
-    setTrendBusy(true);
-    setError("");
-    try {
-      const sys = `You are a content strategist for independent artists in niche communities. Give brief, concrete, tactical notes on current demand/format trends relevant to the given idea and channel. No generic advice. Focus on what's actually working right now for analogue/experimental makers.`;
-      const userMsg = `Channel: ${c.label}\nIdea: ${idea.raw}\n\nWhat's currently working in this space (formats, hooks, angles) that this idea could borrow from? Give 3-4 tactical bullets.`;
-      const text = await callClaude([{ role: "user", content: userMsg }], sys, 500);
-      patch({ trendNotes: text.trim() });
-    } catch (e) {
-      setError("Couldn't fetch notes: " + e.message);
-    }
-    setTrendBusy(false);
-  }
-
-  async function spawnMore() {
-    setMoreBusy(true);
-    setError("");
-    try {
-      const sys = `You generate content ideas for Kali, a London analogue photographer/filmmaker (Queen of the Grain: 35mm, darkroom, film souping, expired stock, creative-ops consulting). Generate follow-on ideas that are adjacent but distinct from a seed idea. Output JSON: [{"channel":"instagram|patreon|substack","raw":"idea text","title":"optional short title"}]`;
-      const userMsg = `Seed idea (on ${c.label}): "${idea.raw}"${idea.draft ? `\n\nDraft that came from it:\n${idea.draft}` : ""}\n\nGive me 3 adjacent or follow-on content ideas — different enough to feel fresh, but thematically connected. Vary the channels if it makes sense. Return as JSON array only.`;
-      const text = await callClaude([{ role: "user", content: userMsg }], sys, 700);
-      const arr = extractJSON(text);
-      if (!arr.length) throw new Error("model returned no ideas");
-      onSpawnMore(arr);
-    } catch (e) {
-      setError("Couldn't generate follow-ons: " + e.message);
-    }
-    setMoreBusy(false);
-  }
-
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          gap: 8,
-          padding: "14px 20px",
-          borderBottom: "1px solid rgba(242,237,228,0.12)",
-          flexWrap: "wrap",
-        }}
-      >
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", background: INK, borderLeft: "1px solid rgba(242,237,228,0.12)" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "14px 20px", borderBottom: "1px solid rgba(242,237,228,0.12)", flexWrap: "wrap" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
           {Object.values(CHANNELS).map((ch) => (
-            <button
-              key={ch.key}
-              onClick={() => patch({ channel: ch.key })}
-              style={{
-                padding: "4px 8px",
-                fontSize: 10,
-                fontFamily: MONO,
-                textTransform: "uppercase",
-                letterSpacing: "0.08em",
-                cursor: "pointer",
-                border: `1px solid ${idea.channel === ch.key ? ch.color : "rgba(242,237,228,0.15)"}`,
-                color: idea.channel === ch.key ? ch.color : "rgba(242,237,228,0.4)",
-                background: idea.channel === ch.key ? ch.dim : "transparent",
-              }}
-            >
-              {ch.short}
-            </button>
+            <button key={ch.key} onClick={() => patch({ channel: ch.key })} style={{ padding: "4px 8px", fontSize: 10, fontFamily: MONO, textTransform: "uppercase", letterSpacing: "0.08em", cursor: "pointer", border: `1px solid ${idea.channel === ch.key ? ch.color : "rgba(242,237,228,0.15)"}`, color: idea.channel === ch.key ? ch.color : "rgba(242,237,228,0.4)", background: idea.channel === ch.key ? ch.dim : "transparent" }}>{ch.short}</button>
           ))}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           {saved && <SaveIndicator />}
-          <button
-            onClick={() => onDelete(idea.id)}
-            style={{
-              fontSize: 10,
-              fontFamily: MONO,
-              textTransform: "uppercase",
-              letterSpacing: "0.08em",
-              color: "rgba(242,237,228,0.35)",
-              background: "none",
-              border: "none",
-              cursor: "pointer",
-            }}
-          >
-            delete
-          </button>
+          <button onClick={() => { onDelete(idea.id); onClose(); }} style={{ fontSize: 10, fontFamily: MONO, textTransform: "uppercase", letterSpacing: "0.08em", color: "rgba(242,237,228,0.35)", background: "none", border: "none", cursor: "pointer" }}>delete</button>
         </div>
       </div>
 
-      <div style={{ flex: 1, overflowY: "auto", padding: "16px 20px", display: "flex", flexDirection: "column", gap: 20 }}>
+      <div style={{ flex: 1, overflowY: "auto", padding: "16px 20px", display: "flex", flexDirection: "column", gap: 16 }}>
         <div>
-          <label style={{ fontFamily: MONO, fontSize: 9, letterSpacing: "0.15em", textTransform: "uppercase", display: "block", marginBottom: 6, color: "rgba(242,237,228,0.4)" }}>
-            Title
-          </label>
-          <input
-            value={idea.title}
-            onChange={(e) => patch({ title: e.target.value })}
-            placeholder="Untitled frame"
-            style={{
-              width: "100%",
-              background: "transparent",
-              border: "none",
-              borderBottom: "1px solid rgba(242,237,228,0.2)",
-              padding: "4px 0",
-              fontSize: 16,
-              fontFamily: SERIF,
-              color: PAPER,
-              outline: "none",
-              boxSizing: "border-box",
-            }}
-          />
+          <label style={{ fontFamily: MONO, fontSize: 9, letterSpacing: "0.15em", textTransform: "uppercase", display: "block", marginBottom: 6, color: "rgba(242,237,228,0.4)" }}>Title</label>
+          <input value={idea.title} onChange={(e) => patch({ title: e.target.value })} placeholder="Untitled frame" style={{ width: "100%", background: "transparent", border: "none", borderBottom: "1px solid rgba(242,237,228,0.2)", padding: "4px 0", fontSize: 16, fontFamily: SERIF, color: PAPER, outline: "none", boxSizing: "border-box" }} />
         </div>
 
         <div>
-          <label style={{ fontFamily: MONO, fontSize: 9, letterSpacing: "0.15em", textTransform: "uppercase", display: "block", marginBottom: 6, color: "rgba(242,237,228,0.4)" }}>
-            The idea, raw
-          </label>
-          <textarea
-            value={idea.raw}
-            onChange={(e) => patch({ raw: e.target.value })}
-            rows={3}
-            style={fieldStyle({ color: "rgba(242,237,228,0.85)" })}
-          />
+          <label style={{ fontFamily: MONO, fontSize: 9, letterSpacing: "0.15em", textTransform: "uppercase", display: "block", marginBottom: 6, color: "rgba(242,237,228,0.4)" }}>The idea, raw</label>
+          <textarea value={idea.raw} onChange={(e) => patch({ raw: e.target.value })} rows={3} style={fieldStyle({ color: "rgba(242,237,228,0.85)" })} />
         </div>
 
         <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-          <button
-            onClick={generateDraft}
-            disabled={draftBusy}
-            title="Cmd/Ctrl+K"
-            style={{ ...btnBase, background: "#ff2d8e", color: INK, opacity: draftBusy ? 0.6 : 1 }}
-          >
+          <button onClick={generateDraft} disabled={draftBusy} style={{ ...btnBase, background: "#ff2d8e", color: INK, opacity: draftBusy ? 0.6 : 1 }}>
             {draftBusy && <Spinner color={INK} size={12} />}
             {idea.draft ? "Re-draft" : "Draft this"}
           </button>
-          <button
-            onClick={checkTrends}
-            disabled={trendBusy}
-            title="What's trending"
-            style={{ ...btnBase, border: "1px solid rgba(242,237,228,0.25)", color: PAPER, background: "transparent", opacity: trendBusy ? 0.6 : 1 }}
-          >
-            {trendBusy && <Spinner color={PAPER} size={12} />}
-            What's working now
-          </button>
         </div>
-
-        <ErrorNote message={error} onDismiss={() => setError("")} />
-
-        {idea.trendNotes && (
-          <div
-            style={{
-              borderLeft: `2px solid ${c.color}`,
-              paddingLeft: 12,
-              fontSize: 12,
-              lineHeight: 1.6,
-              whiteSpace: "pre-line",
-              color: "rgba(242,237,228,0.7)",
-            }}
-          >
-            {idea.trendNotes}
-          </div>
-        )}
 
         {(idea.draft || draftBusy) && (
           <div>
-            <label style={{ fontFamily: MONO, fontSize: 9, letterSpacing: "0.15em", textTransform: "uppercase", display: "block", marginBottom: 6, color: "rgba(242,237,228,0.4)" }}>
-              Draft — edit freely
-            </label>
+            <label style={{ fontFamily: MONO, fontSize: 9, letterSpacing: "0.15em", textTransform: "uppercase", display: "block", marginBottom: 6, color: "rgba(242,237,228,0.4)" }}>Draft — edit freely</label>
             {draftBusy && !editingDraft ? (
-              <div
-                style={{
-                  ...fieldStyle({ fontFamily: SERIF, fontSize: 14 }),
-                  minHeight: 160,
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 8,
-                  color: "rgba(242,237,228,0.4)",
-                }}
-              >
-                <Spinner color={c.color} size={12} /> developing print...
+              <div style={{ ...fieldStyle({ fontFamily: SERIF, fontSize: 14 }), minHeight: 160, display: "flex", alignItems: "center", gap: 8, color: "rgba(242,237,228,0.4)" }}>
+                <Spinner color={c.color} size={12} /> developing...
               </div>
             ) : (
-              <textarea
-                value={editingDraft}
-                onChange={(e) => {
-                  setEditingDraft(e.target.value);
-                  patch({ draft: e.target.value });
-                }}
-                rows={10}
-                style={fieldStyle({ fontFamily: SERIF, fontSize: 14, padding: "12px" })}
-              />
+              <textarea value={editingDraft} onChange={(e) => { setEditingDraft(e.target.value); patch({ draft: e.target.value }); }} rows={8} style={fieldStyle({ fontFamily: SERIF, fontSize: 14, padding: "12px" })} />
             )}
             <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
-              <input
-                value={elaborateNote}
-                onChange={(e) => setElaborateNote(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && elaborate()}
-                placeholder="Tell Claude how to change it — shorter, warmer, add a CTA..."
-                style={{
-                  flex: 1,
-                  minWidth: 160,
-                  background: "transparent",
-                  border: "1px solid rgba(242,237,228,0.15)",
-                  color: PAPER,
-                  padding: "8px 10px",
-                  fontSize: 12,
-                  outline: "none",
-                  boxSizing: "border-box",
-                  fontFamily: "inherit",
-                }}
-              />
-              <button
-                onClick={elaborate}
-                disabled={elaborateBusy || !elaborateNote.trim()}
-                title="Cmd/Ctrl+Enter"
-                style={{
-                  ...btnBase,
-                  border: `1px solid ${c.color}`,
-                  color: c.color,
-                  background: "transparent",
-                  opacity: elaborateBusy || !elaborateNote.trim() ? 0.4 : 1,
-                }}
-              >
+              <input value={elaborateNote} onChange={(e) => setElaborateNote(e.target.value)} onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && elaborate()} placeholder="How to change it..." style={{ flex: 1, minWidth: 160, background: "transparent", border: "1px solid rgba(242,237,228,0.15)", color: PAPER, padding: "8px 10px", fontSize: 12, outline: "none", boxSizing: "border-box", fontFamily: "inherit" }} />
+              <button onClick={elaborate} disabled={elaborateBusy || !elaborateNote.trim()} style={{ ...btnBase, border: `1px solid ${c.color}`, color: c.color, background: "transparent", opacity: elaborateBusy || !elaborateNote.trim() ? 0.4 : 1 }}>
                 {elaborateBusy ? <Spinner color={c.color} size={12} /> : "Elaborate"}
               </button>
             </div>
@@ -1000,164 +397,35 @@ function IdeaDetail({ idea, onUpdate, onDelete, onSpawnMore, visions, onClose })
         )}
 
         {idea.draft && (
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, paddingTop: 8, flexWrap: "wrap" }}>
-            <button
-              onClick={() => patch({ stage: idea.stage === "ready" ? "draft" : "ready" })}
-              title="Cmd/Ctrl+S"
-              style={{
-                ...btnBase,
-                border: `1px solid ${idea.stage === "ready" ? "#8a9a7e" : "rgba(242,237,228,0.25)"}`,
-                color: idea.stage === "ready" ? "#8a9a7e" : PAPER,
-                background: "transparent",
-              }}
-            >
-              {idea.stage === "ready" ? "✓ Marked ready to post" : "Mark ready to post"}
-            </button>
-            <button
-              onClick={spawnMore}
-              disabled={moreBusy}
-              style={{
-                ...btnBase,
-                border: `1px solid ${c.color}`,
-                color: c.color,
-                background: "transparent",
-                opacity: moreBusy ? 0.6 : 1,
-              }}
-            >
-              {moreBusy && <Spinner color={c.color} size={12} />}
-              + 3 more like this
-            </button>
-          </div>
+          <button onClick={() => patch({ stage: idea.stage === "ready" ? "draft" : "ready" })} style={{ ...btnBase, border: `1px solid ${idea.stage === "ready" ? "#8a9a7e" : "rgba(242,237,228,0.25)"}`, color: idea.stage === "ready" ? "#8a9a7e" : PAPER, background: "transparent" }}>
+            {idea.stage === "ready" ? "✓ Ready to post" : "Mark ready"}
+          </button>
         )}
+
+        <ErrorNote message={error} onDismiss={() => setError("")} />
       </div>
     </div>
   );
 }
 
-// ---------- Brain Dump ----------
-function BrainDump({ onAdd, inputRef }) {
-  const [text, setText] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-
-  useEffect(() => {
-    const handleKeyDown = (e) => {
-      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === "d") {
-        e.preventDefault();
-        inputRef.current?.focus();
-      }
-      if ((e.metaKey || e.ctrlKey) && e.key === "Enter" && document.activeElement === inputRef.current) {
-        e.preventDefault();
-        process();
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [text, inputRef]);
-
-  async function process() {
-    if (!text.trim()) return;
-    setBusy(true);
-    setError("");
-    try {
-      const sys = `You take messy, rapid-fire brain-dump text from Kali, an ADHD creative (analogue photographer/filmmaker, "Queen of the Grain" — 35mm, darkroom, film souping, expired stock; also runs creative-ops consulting). You split tangled, half-formed ideas into clean separate ideas. You infer channels (instagram, patreon, substack) based on content type and energy. Output as JSON array: [{"channel":"instagram|patreon|substack","raw":"idea in Kali's voice","title":"optional short title"}]. Be specific.`;
-      const out = await callClaude([{ role: "user", content: text }], sys, 800);
-      const arr = extractJSON(out);
-      if (!arr.length) throw new Error("couldn't find any ideas in that — try rephrasing");
-      onAdd(arr);
-      setText("");
-    } catch (e) {
-      setError("Couldn't process that: " + e.message);
-    }
-    setBusy(false);
-  }
-
-  return (
-    <div style={{ border: "1px solid rgba(255,45,142,0.3)", background: "rgba(255,45,142,0.04)", padding: 16 }}>
-      <div style={{ fontFamily: MONO, fontSize: 10, letterSpacing: "0.2em", textTransform: "uppercase", marginBottom: 8, color: "#ff2d8e" }}>
-        Brain dump → frames
-      </div>
-      <textarea
-        ref={inputRef}
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        placeholder="Dump everything. Half-thoughts, three ideas tangled together, a feeling about a roll of film you just developed — whatever's loud right now. Claude will split it into separate frames."
-        rows={4}
-        style={fieldStyle({ border: "none", fontFamily: SERIF, fontSize: 14, padding: 0, marginBottom: 12 })}
-      />
-      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-        <button
-          onClick={process}
-          disabled={busy || !text.trim()}
-          style={{ ...btnBase, background: "#ff2d8e", color: INK, opacity: busy || !text.trim() ? 0.5 : 1, padding: "10px 16px" }}
-        >
-          {busy && <Spinner color={INK} size={12} />}
-          {busy ? "Developing..." : "Develop into frames"}
-        </button>
-        <span style={{ fontFamily: MONO, fontSize: 9, color: "rgba(242,237,228,0.3)" }}>or Cmd/Ctrl+Enter</span>
-      </div>
-      <ErrorNote message={error} onDismiss={() => setError("")} />
-    </div>
-  );
-}
-
-// ---------- Main App ----------
+// Main App
 function App() {
   const [ideas, setIdeas] = useState([]);
   const [visions, setVisions] = useState({ instagram: "", patreon: "", substack: "" });
   const [filter, setFilter] = useState("all");
   const [activeId, setActiveId] = useState(null);
   const [showVision, setShowVision] = useState(false);
-  const [showShortcuts, setShowShortcuts] = useState(false);
-  const [showApiModal, setShowApiModal] = useState(false);
+  const [showApi, setShowApi] = useState(false);
   const [loaded, setLoaded] = useState(false);
-  const [isNarrow, setIsNarrow] = useState(typeof window !== "undefined" ? window.innerWidth < 1024 : false);
-  const brainDumpRef = useRef(null);
 
   useEffect(() => {
     (async () => {
-      const [i, v, activeId] = await Promise.all([loadIdeas(), loadVisions(), loadActiveId()]);
+      const [i, v] = await Promise.all([loadIdeas(), loadVisions()]);
       setIdeas(i);
       setVisions(v);
-      if (activeId && i.find(x => x.id === activeId)) {
-        setActiveId(activeId);
-      }
       setLoaded(true);
     })();
   }, []);
-
-  useEffect(() => {
-    saveActiveId(activeId);
-  }, [activeId]);
-
-  useEffect(() => {
-    function onResize() {
-      setIsNarrow(window.innerWidth < 1024);
-    }
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
-  }, []);
-
-  useEffect(() => {
-    const handleKeyDown = (e) => {
-      if (e.key === "Escape" && (showVision || showShortcuts || showApiModal)) {
-        setShowVision(false);
-        setShowShortcuts(false);
-        setShowApiModal(false);
-      }
-      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === "?") {
-        e.preventDefault();
-        setShowShortcuts(true);
-      }
-      // Quick filter by number key
-      if (e.key === "1") setFilter("all");
-      if (e.key === "2") setFilter("instagram");
-      if (e.key === "3") setFilter("patreon");
-      if (e.key === "4") setFilter("substack");
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [showVision, showShortcuts, showApiModal]);
 
   function nextFrameNo(list) {
     return list.length ? Math.max(...list.map((i) => i.frameNo)) + 1 : 1;
@@ -1173,9 +441,7 @@ function App() {
         channel: safeChannel(a.channel),
         stage: "frame",
         draft: "",
-        trendNotes: "",
         frameNo: n++,
-        createdAt: Date.now(),
       }));
       const next = [...fresh, ...prev];
       saveIdeas(next);
@@ -1204,182 +470,58 @@ function App() {
   const filtered = ideas.filter((i) => filter === "all" || i.channel === filter);
   const active = ideas.find((i) => i.id === activeId);
 
-  const counts = ideas.reduce((acc, i) => {
-    const k = safeChannel(i.channel);
-    acc[k] = (acc[k] || 0) + 1;
-    return acc;
-  }, {});
-
   return (
     <div style={{ minHeight: "100vh", width: "100%", display: "flex", flexDirection: "column", background: INK, color: PAPER, fontFamily: MONO }}>
-      <header
-        style={{
-          borderBottom: "1px solid rgba(242,237,228,0.12)",
-          padding: "16px 20px",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          gap: 12,
-          flexWrap: "wrap",
-        }}
-      >
-        <div style={{ display: "flex", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
-          <h1 style={{ fontFamily: SERIF, fontWeight: 500, fontSize: 24, margin: 0, letterSpacing: "-0.01em" }}>
-            Contact Sheet
-          </h1>
-          <span style={{ fontFamily: MONO, fontSize: 10, letterSpacing: "0.2em", textTransform: "uppercase", color: "rgba(242,237,228,0.4)" }}>
-            content studio
-          </span>
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-          <button
-            onClick={() => setShowVision(true)}
-            style={{ ...btnBase, border: "1px solid rgba(242,237,228,0.25)", color: PAPER, background: "transparent" }}
-          >
-            Vision &amp; tone
-          </button>
-          <button
-            onClick={() => setShowShortcuts(true)}
-            title="Cmd/Ctrl+Shift+?"
-            style={{ ...btnBase, border: "1px solid rgba(242,237,228,0.25)", color: PAPER, background: "transparent", fontSize: 10 }}
-          >
-            ? Help
-          </button>
-          <button
-            onClick={() => setShowApiModal(true)}
-            style={{ ...btnBase, border: "1px solid rgba(242,237,228,0.25)", color: PAPER, background: "transparent", fontSize: 10 }}
-          >
-            ⚙ API Key
-          </button>
+      {showApi && <ApiKeyModal onClose={() => setShowApi(false)} onSet={() => {}} />}
+      {showVision && <VisionRoom visions={visions} setVisions={setVisions} onClose={() => setShowVision(false)} />}
+
+      <header style={{ borderBottom: "1px solid rgba(242,237,228,0.12)", padding: "16px 20px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+        <h1 style={{ fontFamily: SERIF, fontWeight: 500, fontSize: 24, margin: 0, letterSpacing: "-0.01em" }}>Contact Sheet</h1>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button onClick={() => setShowVision(true)} style={{ ...btnBase, border: "1px solid rgba(242,237,228,0.25)", color: PAPER, background: "transparent" }}>Vision</button>
+          <button onClick={() => setShowApi(true)} style={{ ...btnBase, border: "1px solid rgba(242,237,228,0.25)", color: PAPER, background: "transparent" }}>⚙ API</button>
         </div>
       </header>
 
-      <div style={{ flex: 1, display: "flex", flexDirection: isNarrow ? "column" : "row", minHeight: 0 }}>
-        <div
-          style={{
-            flex: 1,
-            display: "flex",
-            flexDirection: "column",
-            minHeight: 0,
-            borderRight: isNarrow ? "none" : "1px solid rgba(242,237,228,0.12)",
-            borderBottom: isNarrow ? "1px solid rgba(242,237,228,0.12)" : "none",
-          }}
-        >
+      <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0, borderRight: "1px solid rgba(242,237,228,0.12)" }}>
           <div style={{ padding: 20 }}>
-            <BrainDump onAdd={addIdeasFromArray} inputRef={brainDumpRef} />
+            {loaded && <BrainDump onAdd={addIdeasFromArray} />}
           </div>
 
           <div style={{ padding: "0 20px 8px", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-            <button
-              onClick={() => setFilter("all")}
-              title="Press 1"
-              style={{
-                padding: "6px 12px",
-                fontSize: 11,
-                letterSpacing: "0.12em",
-                textTransform: "uppercase",
-                fontFamily: MONO,
-                border: `1px solid ${filter === "all" ? PAPER : "rgba(242,237,228,0.18)"}`,
-                color: filter === "all" ? PAPER : "rgba(242,237,228,0.55)",
-                background: "transparent",
-                cursor: "pointer",
-              }}
-            >
-              ALL · {ideas.length}
-            </button>
+            <button onClick={() => setFilter("all")} style={{ padding: "6px 12px", fontSize: 11, letterSpacing: "0.12em", textTransform: "uppercase", fontFamily: MONO, border: `1px solid ${filter === "all" ? PAPER : "rgba(242,237,228,0.18)"}`, color: filter === "all" ? PAPER : "rgba(242,237,228,0.55)", background: "transparent", cursor: "pointer" }}>ALL · {ideas.length}</button>
             {Object.keys(CHANNELS).map((k) => (
               <ChannelPill key={k} channel={k} active={filter === k} onClick={() => setFilter(k)} />
             ))}
-            <span style={{ fontFamily: MONO, fontSize: 10, color: "rgba(242,237,228,0.35)", marginLeft: "auto" }}>
-              {Object.entries(counts)
-                .map(([k, v]) => `${CHANNELS[k].short} ${v}`)
-                .join("  ·  ")}
-            </span>
           </div>
 
-          <div style={{ flex: 1, overflowY: "auto", padding: "0 20px 20px" }}>
+          <div style={{ flex: 1, overflowY: "auto", padding: "0 20px 20px", display: "flex", gap: 12, flexWrap: "wrap", alignContent: "flex-start" }}>
             {!loaded ? (
-              <div style={{ fontFamily: MONO, fontSize: 12, padding: "40px 0", textAlign: "center", color: "rgba(242,237,228,0.4)" }}>
-                loading sheet...
-              </div>
+              <div style={{ fontFamily: MONO, fontSize: 12, padding: "40px 0", textAlign: "center", color: "rgba(242,237,228,0.4)", width: "100%" }}>loading...</div>
             ) : filtered.length === 0 ? (
-              <div style={{ fontFamily: MONO, fontSize: 12, padding: "64px 0", textAlign: "center", lineHeight: 1.6, color: "rgba(242,237,228,0.35)" }}>
-                No frames yet.
-                <br />
-                Dump a thought above — it'll show up here.
-              </div>
+              <div style={{ fontFamily: MONO, fontSize: 12, padding: "40px 0", textAlign: "center", color: "rgba(242,237,228,0.35)", width: "100%" }}>No frames yet. Dump a thought above.</div>
             ) : (
-              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignContent: "flex-start" }}>
-                {filtered.map((idea) => (
-                  <IdeaFrame
-                    key={idea.id}
-                    idea={idea}
-                    onOpen={() => setActiveId(idea.id)}
-                    isActive={activeId === idea.id}
-                  />
-                ))}
-              </div>
+              filtered.map((idea) => (
+                <IdeaFrame key={idea.id} idea={idea} onOpen={() => setActiveId(idea.id)} isActive={activeId === idea.id} />
+              ))
             )}
           </div>
         </div>
 
-        {!isNarrow && active && (
-          <div
-            className="slide-in-panel"
-            style={{
-              width: 400,
-              borderLeft: "1px solid rgba(242,237,228,0.12)",
-              display: "flex",
-              flexDirection: "column",
-              background: INK,
-              overflow: "hidden",
-            }}
-          >
-            <IdeaDetail
-              idea={active}
-              onUpdate={updateIdea}
-              onDelete={deleteIdea}
-              onSpawnMore={addIdeasFromArray}
-              visions={visions}
-              onClose={() => setActiveId(null)}
-            />
-          </div>
-        )}
-
-        {isNarrow && active && (
-          <div
-            className="slide-in-panel"
-            style={{
-              position: "fixed",
-              inset: 0,
-              zIndex: 40,
-              display: "flex",
-              background: INK,
-              flexDirection: "column",
-            }}
-          >
-            <IdeaDetail
-              idea={active}
-              onUpdate={updateIdea}
-              onDelete={deleteIdea}
-              onSpawnMore={addIdeasFromArray}
-              visions={visions}
-              onClose={() => setActiveId(null)}
-            />
+        {active && (
+          <div style={{ width: 400, display: "flex", flexDirection: "column", minHeight: 0 }}>
+            <IdeaDetail idea={active} onUpdate={updateIdea} onDelete={deleteIdea} onSpawnMore={addIdeasFromArray} visions={visions} onClose={() => setActiveId(null)} />
           </div>
         )}
       </div>
-
-      {showVision && <VisionRoom visions={visions} setVisions={setVisions} onClose={() => setShowVision(false)} />}
-      {showShortcuts && <ShortcutsHelp onClose={() => setShowShortcuts(false)} />}
-      {showApiModal && <ApiKeyModal onClose={() => setShowApiModal(false)} onSet={() => {}} />}
     </div>
   );
 }
 
+// Render
 const root = ReactDOM.createRoot(document.getElementById("root"));
 root.render(<App />);
-
 </script>
 </body>
 </html>
