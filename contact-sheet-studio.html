@@ -12,22 +12,28 @@
 <style>
 html, body { margin: 0; padding: 0; background: #1a1612; }
 * { box-sizing: border-box; }
-button { font: inherit; }
+button { font: inherit; cursor: pointer; }
 textarea, input { font: inherit; }
 textarea::placeholder, input::placeholder { color: rgba(242,237,228,0.3); }
 
 @keyframes studio-spin { to { transform: rotate(360deg); } }
+@keyframes pulse-save { 0%, 100% { opacity: 0.4; } 50% { opacity: 1; } }
+@keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
 
 ::-webkit-scrollbar { height: 8px; width: 8px; }
 ::-webkit-scrollbar-track { background: rgba(242,237,228,0.04); }
-::-webkit-scrollbar-thumb { background: rgba(242,237,228,0.15); }
+::-webkit-scrollbar-thumb { background: rgba(242,237,228,0.15); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(242,237,228,0.25); }
+
+.save-indicator { animation: pulse-save 1.2s ease-in-out; font-size: 10px; color: rgba(138,154,126,0.8); }
+.slide-in-panel { animation: slideIn 0.25s ease-out; }
 
 </style>
 </head>
 <body>
 <div id="root"></div>
 <script type="text/babel" data-presets="react">
-const { useState, useEffect } = React;
+const { useState, useEffect, useRef, useCallback } = React;
 
 // ---------- Constants ----------
 const CHANNELS = {
@@ -60,18 +66,29 @@ const CHANNELS = {
 const STAGE_LABEL = { frame: "Negative", draft: "Proof", ready: "Print" };
 const STORAGE_KEY = "studio-ideas-v1";
 const VISION_KEY = "studio-visions-v1";
+const ACTIVE_KEY = "studio-active-id-v1";
+const API_KEY_KEY = "studio-api-key-v1";
 const PAPER = "#f2ede4";
 const INK = "#1a1612";
 const SERIF = "'Fraunces', Georgia, serif";
 const MONO = "'Space Mono', 'Courier New', monospace";
 
-// ---------- Claude API helper ----------
+// ---------- Claude API helper with key management ----------
 async function callClaude(messages, system, maxTokens = 1200) {
+  const apiKey = typeof window !== "undefined" && window.localStorage ? window.localStorage.getItem(API_KEY_KEY) : null;
+  if (!apiKey) {
+    throw new Error("API key not configured. Click ⚙ Settings to add your Claude API key.");
+  }
+  
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { 
+      "Content-Type": "application/json",
+      "x-api-key": apiKey,
+      "anthropic-version": "2023-06-01",
+    },
     body: JSON.stringify({
-      model: "claude-sonnet-4-6",
+      model: "claude-3-5-sonnet-20241022",
       max_tokens: maxTokens,
       system,
       messages,
@@ -79,8 +96,11 @@ async function callClaude(messages, system, maxTokens = 1200) {
   });
   if (!res.ok) {
     const errText = await res.text().catch(() => "");
-    const short = errText ? ": " + errText.slice(0, 80) : "";
-    throw new Error("API error " + res.status + short);
+    let msg = "API error " + res.status;
+    if (res.status === 401) msg = "Invalid API key. Check ⚙ Settings.";
+    else if (res.status === 429) msg = "Rate limited. Wait a moment.";
+    else if (res.status >= 500) msg = "Anthropic API error. Try again soon.";
+    throw new Error(msg);
   }
   const data = await res.json();
   const text = (data.content || [])
@@ -108,42 +128,63 @@ function safeChannel(ch) {
   return CHANNELS[ch] ? ch : "instagram";
 }
 
-// ---------- Storage helpers (defensive: window.storage may not exist) ----------
-const hasStorage = typeof window !== "undefined" && window.storage && typeof window.storage.get === "function";
-
+// ---------- Storage helpers with localStorage ----------
 async function loadIdeas() {
-  if (!hasStorage) return [];
+  if (typeof localStorage === "undefined") return [];
   try {
-    const r = await window.storage.get(STORAGE_KEY);
-    return r ? JSON.parse(r.value) : [];
+    const data = localStorage.getItem(STORAGE_KEY);
+    return data ? JSON.parse(data) : [];
   } catch (e) {
+    console.error("Failed to load ideas:", e);
     return [];
   }
 }
+
 async function saveIdeas(ideas) {
-  if (!hasStorage) return;
+  if (typeof localStorage === "undefined") return;
   try {
-    await window.storage.set(STORAGE_KEY, JSON.stringify(ideas));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(ideas));
   } catch (e) {
-    console.error("save failed", e);
+    console.error("Failed to save ideas:", e);
   }
 }
+
 async function loadVisions() {
   const fallback = { instagram: "", patreon: "", substack: "" };
-  if (!hasStorage) return fallback;
+  if (typeof localStorage === "undefined") return fallback;
   try {
-    const r = await window.storage.get(VISION_KEY);
-    return r ? { ...fallback, ...JSON.parse(r.value) } : fallback;
+    const data = localStorage.getItem(VISION_KEY);
+    return data ? { ...fallback, ...JSON.parse(data) } : fallback;
   } catch (e) {
     return fallback;
   }
 }
+
 async function saveVisions(v) {
-  if (!hasStorage) return;
+  if (typeof localStorage === "undefined") return;
   try {
-    await window.storage.set(VISION_KEY, JSON.stringify(v));
+    localStorage.setItem(VISION_KEY, JSON.stringify(v));
   } catch (e) {
-    console.error("save failed", e);
+    console.error("Failed to save visions:", e);
+  }
+}
+
+async function loadActiveId() {
+  if (typeof localStorage === "undefined") return null;
+  try {
+    return localStorage.getItem(ACTIVE_KEY);
+  } catch (e) {
+    return null;
+  }
+}
+
+async function saveActiveId(id) {
+  if (typeof localStorage === "undefined") return;
+  try {
+    if (id) localStorage.setItem(ACTIVE_KEY, id);
+    else localStorage.removeItem(ACTIVE_KEY);
+  } catch (e) {
+    console.error("Failed to save active id:", e);
   }
 }
 
@@ -167,6 +208,10 @@ function Spinner({ color = "#ff2d8e", size = 14 }) {
       }}
     />
   );
+}
+
+function SaveIndicator() {
+  return <span className="save-indicator">✓ saved</span>;
 }
 
 function ErrorNote({ message, onDismiss }) {
@@ -264,6 +309,173 @@ function fieldStyle(extra) {
   };
 }
 
+// ---------- API Key Settings Modal ----------
+function ApiKeyModal({ onClose, onSet }) {
+  const [key, setKey] = useState("");
+  const [masked, setMasked] = useState("");
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState(false);
+
+  useEffect(() => {
+    if (typeof localStorage !== "undefined") {
+      const stored = localStorage.getItem(API_KEY_KEY);
+      if (stored) {
+        setMasked(stored.slice(0, 10) + "..." + stored.slice(-4));
+        setSuccess(true);
+      }
+    }
+  }, []);
+
+  function handleSet() {
+    if (!key.trim()) {
+      setError("Please enter an API key");
+      return;
+    }
+    if (key.length < 20) {
+      setError("API key seems too short");
+      return;
+    }
+    if (typeof localStorage !== "undefined") {
+      localStorage.setItem(API_KEY_KEY, key);
+      setKey("");
+      setMasked(key.slice(0, 10) + "..." + key.slice(-4));
+      setError("");
+      setSuccess(true);
+      onSet();
+      setTimeout(() => onClose(), 1000);
+    }
+  }
+
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 100,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        background: "rgba(0,0,0,0.8)",
+        backdropFilter: "blur(4px)",
+        padding: 16,
+      }}
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div
+        style={{
+          width: "100%",
+          maxWidth: 500,
+          background: INK,
+          border: "1px solid rgba(242,237,228,0.15)",
+          padding: 24,
+        }}
+      >
+        <h2 style={{ fontFamily: SERIF, fontSize: 18, color: PAPER, margin: "0 0 12px" }}>
+          Claude API Key
+        </h2>
+        <p style={{ fontFamily: MONO, fontSize: 11, color: "rgba(242,237,228,0.6)", marginBottom: 12, lineHeight: 1.6 }}>
+          Get your key from <a href="https://console.anthropic.com/account/keys" target="_blank" rel="noopener noreferrer" style={{ color: "#ff2d8e", textDecoration: "none" }}>console.anthropic.com/account/keys</a>.
+          <br />
+          Your key is stored locally only—never sent anywhere else.
+        </p>
+        {success && (
+          <div style={{ background: "rgba(138,154,126,0.1)", border: "1px solid rgba(138,154,126,0.3)", color: "#8a9a7e", fontFamily: MONO, fontSize: 11, padding: "8px 10px", marginBottom: 12, borderRadius: "2px" }}>
+            ✓ API key configured: {masked}
+          </div>
+        )}
+        {!success && (
+          <input
+            type="password"
+            value={key}
+            onChange={(e) => {
+              setKey(e.target.value);
+              setError("");
+            }}
+            onKeyDown={(e) => e.key === "Enter" && handleSet()}
+            placeholder="sk-ant-..."
+            style={{
+              ...fieldStyle({}),
+              marginBottom: 12,
+              fontFamily: MONO,
+              fontSize: 12,
+            }}
+            autoFocus
+          />
+        )}
+        {error && <ErrorNote message={error} onDismiss={() => setError("")} />}
+        <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+          <button
+            onClick={onClose}
+            style={{ ...btnBase, border: "1px solid rgba(242,237,228,0.25)", color: PAPER, background: "transparent" }}
+          >
+            Close
+          </button>
+          {!success && (
+            <button
+              onClick={handleSet}
+              style={{ ...btnBase, background: "#ff2d8e", color: INK }}
+            >
+              Save Key
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------- Keyboard Shortcuts Help ----------
+function ShortcutsHelp({ onClose }) {
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 99,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        background: "rgba(0,0,0,0.7)",
+        backdropFilter: "blur(4px)",
+        padding: 16,
+      }}
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div
+        style={{
+          width: "100%",
+          maxWidth: 420,
+          background: INK,
+          border: "1px solid rgba(242,237,228,0.15)",
+          padding: 24,
+          maxHeight: "80vh",
+          overflowY: "auto",
+        }}
+      >
+        <h2 style={{ fontFamily: SERIF, fontSize: 18, color: PAPER, margin: "0 0 16px" }}>
+          Keyboard Shortcuts
+        </h2>
+        <div style={{ fontFamily: MONO, fontSize: 11, color: "rgba(242,237,228,0.7)", lineHeight: 2 }}>
+          <div><strong style={{ color: "#ff2d8e" }}>Cmd/Ctrl + Shift + D</strong> — Focus brain dump</div>
+          <div><strong style={{ color: "#ff2d8e" }}>Cmd/Ctrl + Enter</strong> — Send brain dump</div>
+          <div><strong style={{ color: "#ff2d8e" }}>Escape</strong> — Close panel/modals</div>
+          <div><strong style={{ color: "#ff2d8e" }}>Cmd/Ctrl + K</strong> — Draft idea</div>
+          <div><strong style={{ color: "#ff2d8e" }}>Cmd/Ctrl + S</strong> — Mark ready</div>
+          <div><strong style={{ color: "#ff2d8e" }}>Cmd/Ctrl + ?</strong> — Show this menu</div>
+          <div><strong style={{ color: "#ff2d8e" }}>1, 2, 3, 4</strong> — Filter by channel</div>
+          <div style={{ marginTop: 8, color: "rgba(242,237,228,0.5)", fontSize: 10 }}>💡 All changes auto-save instantly</div>
+        </div>
+        <button
+          onClick={onClose}
+          style={{ ...btnBase, background: "#ff2d8e", color: INK, marginTop: 20 }}
+        >
+          Got it
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ---------- Vision Room ----------
 function VisionRoom({ visions, setVisions, onClose }) {
   const [local, setLocal] = useState(visions);
@@ -281,10 +493,10 @@ function VisionRoom({ visions, setVisions, onClose }) {
         [
           {
             role: "user",
-            content: `Kali is a London analogue photographer & experimental filmmaker (brand: "Queen of the Grain") working with 35mm, darkroom printing, film souping, expired stock. She also runs a creative ops consultancy. Write a short, punchy 3-4 sentence VISION + TONE statement for her ${c.label} channel specifically (${c.desc}). Make it concrete and specific to her actual practice, not generic creator advice. Write it as if it's notes-to-self she'd pin above her desk. No headers, no markdown, just the statement.`,
+            content: `Kali is a London analogue photographer & experimental filmmaker (brand: "Queen of the Grain") working with 35mm, darkroom printing, film souping, expired stock. She also runs a creative operations consulting practice. She's ADHD, direct, sensory-focused, no filter. For the ${c.label} channel (${c.desc}), write a concise vision statement: what goes here, tone, audience, what she won't post. 2-3 sentences max. Be specific to her voice and brand.`,
           },
         ],
-        "You are a sharp creative strategist who writes vision statements in a direct, specific, slightly literary voice — never generic marketing-speak.",
+        "You are a sharp creative strategist who writes vision statements in a direct, specific, slightly literary voice. No marketing fluff. Write for an ADHD creative.",
         400
       );
       const updated = { ...local, [channelKey]: text.trim() };
@@ -292,7 +504,7 @@ function VisionRoom({ visions, setVisions, onClose }) {
       setVisions(updated);
       saveVisions(updated);
     } catch (e) {
-      setError("Couldn't generate a suggestion (" + e.message + "). You can still write your own below.");
+      setError("Couldn't generate a suggestion (" + e.message + ")");
     }
     setBusy(null);
   }
@@ -355,7 +567,7 @@ function VisionRoom({ visions, setVisions, onClose }) {
             onClick={commit}
             style={{ ...btnBase, background: "#ff2d8e", color: INK, flexShrink: 0 }}
           >
-            Save &amp; close
+            Done
           </button>
         </div>
 
@@ -487,7 +699,7 @@ function IdeaFrame({ idea, onOpen, isActive }) {
 }
 
 // ---------- Detail panel ----------
-function IdeaDetail({ idea, onUpdate, onDelete, onSpawnMore, visions }) {
+function IdeaDetail({ idea, onUpdate, onDelete, onSpawnMore, visions, onClose }) {
   const [draftBusy, setDraftBusy] = useState(false);
   const [trendBusy, setTrendBusy] = useState(false);
   const [moreBusy, setMoreBusy] = useState(false);
@@ -495,24 +707,48 @@ function IdeaDetail({ idea, onUpdate, onDelete, onSpawnMore, visions }) {
   const [elaborateNote, setElaborateNote] = useState("");
   const [elaborateBusy, setElaborateBusy] = useState(false);
   const [error, setError] = useState("");
+  const [saved, setSaved] = useState(false);
   const c = CHANNELS[safeChannel(idea.channel)];
+  const saveTimeoutRef = useRef(null);
 
   useEffect(() => {
     setEditingDraft(idea.draft || "");
     setError("");
   }, [idea.id]);
 
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "k") {
+        e.preventDefault();
+        generateDraft();
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key === "s") {
+        e.preventDefault();
+        patch({ stage: idea.stage === "ready" ? "draft" : "ready" });
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [idea, onClose]);
+
   function patch(fields) {
     onUpdate({ ...idea, ...fields });
+    setSaved(true);
+    clearTimeout(saveTimeoutRef.current);
+    saveTimeoutRef.current = setTimeout(() => setSaved(false), 2000);
   }
 
   async function generateDraft() {
     setDraftBusy(true);
     setError("");
     try {
-      const sys = `You write Instagram captions, Patreon posts, and Substack newsletter copy for Kali, a London analogue photographer and experimental filmmaker (brand "Queen of the Grain") working in 35mm, darkroom printing, film souping, expired stock. Match the channel's tone exactly. Write in her voice: direct, sensory, unpretentious, no hashtag spam, no generic creator-speak ("level up your", "game-changer", emoji walls). Output ONLY the post content, nothing else — no preamble, no "Here's a draft".`;
-      const visionNote = visions[idea.channel] ? `\n\nChannel vision/tone notes: ${visions[idea.channel]}` : "";
-      const userMsg = `Channel: ${c.label} (${c.desc})${visionNote}\n\nIdea: ${idea.raw}${idea.title ? `\nWorking title: ${idea.title}` : ""}\n\nWrite a ready-to-edit ${c.label} post draft from this idea.`;
+      const sys = `You write Instagram captions, Patreon posts, and Substack newsletter copy for Kali, a London analogue photographer and experimental filmmaker (brand "Queen of the Grain") working with 35mm, darkroom printing, film souping, expired stock. She also runs creative operations consulting. She's ADHD, direct, sensory-focused, no filter or creator-speak. Keep her voice: specific, slightly irreverent, grounded. Output only the ready-to-edit post draft, no meta-commentary.`;
+      const visionNote = visions[idea.channel] ? `\n\nChannel vision/tone: ${visions[idea.channel]}` : "";
+      const userMsg = `Channel: ${c.label} (${c.desc})${visionNote}\n\nIdea: ${idea.raw}${idea.title ? `\nWorking title: ${idea.title}` : ""}\n\nWrite a ready-to-edit ${c.label} post draft. Keep it direct and specific. ${c.label === "Instagram" ? "Under 300 chars if possible. No hashtags unless essential." : c.label === "Patreon" ? "Behind-the-scenes, personal, intimate. 200-400 words." : "Conversational, considered, longer-form. 500-800 words."}`;
       const text = await callClaude([{ role: "user", content: userMsg }], sys, 900);
       setEditingDraft(text.trim());
       patch({ draft: text.trim(), stage: "draft" });
@@ -527,7 +763,7 @@ function IdeaDetail({ idea, onUpdate, onDelete, onSpawnMore, visions }) {
     setElaborateBusy(true);
     setError("");
     try {
-      const sys = `You write/edit social and newsletter content for Kali (Queen of the Grain — analogue photography, darkroom, film souping). Keep her voice: direct, sensory, no creator-speak. Output ONLY the revised post, nothing else.`;
+      const sys = `You write/edit social and newsletter content for Kali (Queen of the Grain — analogue photography, darkroom, film souping). Keep her voice: direct, sensory, no creator-speak. Output just the revised draft, nothing else.`;
       const userMsg = `Channel: ${c.label}\n\nCurrent draft:\n${editingDraft}\n\nRevision request: ${elaborateNote}\n\nReturn the full revised draft.`;
       const text = await callClaude([{ role: "user", content: userMsg }], sys, 900);
       setEditingDraft(text.trim());
@@ -543,8 +779,8 @@ function IdeaDetail({ idea, onUpdate, onDelete, onSpawnMore, visions }) {
     setTrendBusy(true);
     setError("");
     try {
-      const sys = `You are a content strategist. Give brief, concrete, non-generic notes on current demand/format trends relevant to the given idea and channel, for an analogue film photographer audience. 3 bullet points max, each one sentence, no fluff, no hashtags. Note: base this on general patterns you know of, since you don't have live search access here — keep claims general rather than citing specific recent events.`;
-      const userMsg = `Channel: ${c.label}\nIdea: ${idea.raw}\n\nWhat's currently working in this content space (formats, hooks, angles) that this idea could borrow from?`;
+      const sys = `You are a content strategist for independent artists in niche communities. Give brief, concrete, tactical notes on current demand/format trends relevant to the given idea and channel. No generic advice. Focus on what's actually working right now for analogue/experimental makers.`;
+      const userMsg = `Channel: ${c.label}\nIdea: ${idea.raw}\n\nWhat's currently working in this space (formats, hooks, angles) that this idea could borrow from? Give 3-4 tactical bullets.`;
       const text = await callClaude([{ role: "user", content: userMsg }], sys, 500);
       patch({ trendNotes: text.trim() });
     } catch (e) {
@@ -557,8 +793,8 @@ function IdeaDetail({ idea, onUpdate, onDelete, onSpawnMore, visions }) {
     setMoreBusy(true);
     setError("");
     try {
-      const sys = `You generate content ideas for Kali, a London analogue photographer/filmmaker (Queen of the Grain: 35mm, darkroom, film souping, expired stock, also building a creative-ops consultancy). Respond with ONLY a JSON array of exactly 3 objects: [{"title": "...", "raw": "...", "channel": "instagram"|"patreon"|"substack"}]. "title" is a punchy 5-8 word title. "raw" is 1-2 sentences fleshing out the idea. Pick whichever channel fits each idea best — don't force all 3 onto the same one. No markdown, no commentary, just the JSON array.`;
-      const userMsg = `Seed idea (on ${c.label}): "${idea.raw}"${idea.draft ? `\n\nDraft that came from it:\n${idea.draft}` : ""}\n\nGive me 3 adjacent or follow-on content ideas — different enough to not be repeats, but clearly related in spirit or process.`;
+      const sys = `You generate content ideas for Kali, a London analogue photographer/filmmaker (Queen of the Grain: 35mm, darkroom, film souping, expired stock, creative-ops consulting). Generate follow-on ideas that are adjacent but distinct from a seed idea. Output JSON: [{"channel":"instagram|patreon|substack","raw":"idea text","title":"optional short title"}]`;
+      const userMsg = `Seed idea (on ${c.label}): "${idea.raw}"${idea.draft ? `\n\nDraft that came from it:\n${idea.draft}` : ""}\n\nGive me 3 adjacent or follow-on content ideas — different enough to feel fresh, but thematically connected. Vary the channels if it makes sense. Return as JSON array only.`;
       const text = await callClaude([{ role: "user", content: userMsg }], sys, 700);
       const arr = extractJSON(text);
       if (!arr.length) throw new Error("model returned no ideas");
@@ -603,21 +839,24 @@ function IdeaDetail({ idea, onUpdate, onDelete, onSpawnMore, visions }) {
             </button>
           ))}
         </div>
-        <button
-          onClick={() => onDelete(idea.id)}
-          style={{
-            fontSize: 10,
-            fontFamily: MONO,
-            textTransform: "uppercase",
-            letterSpacing: "0.08em",
-            color: "rgba(242,237,228,0.35)",
-            background: "none",
-            border: "none",
-            cursor: "pointer",
-          }}
-        >
-          delete
-        </button>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          {saved && <SaveIndicator />}
+          <button
+            onClick={() => onDelete(idea.id)}
+            style={{
+              fontSize: 10,
+              fontFamily: MONO,
+              textTransform: "uppercase",
+              letterSpacing: "0.08em",
+              color: "rgba(242,237,228,0.35)",
+              background: "none",
+              border: "none",
+              cursor: "pointer",
+            }}
+          >
+            delete
+          </button>
+        </div>
       </div>
 
       <div style={{ flex: 1, overflowY: "auto", padding: "16px 20px", display: "flex", flexDirection: "column", gap: 20 }}>
@@ -660,6 +899,7 @@ function IdeaDetail({ idea, onUpdate, onDelete, onSpawnMore, visions }) {
           <button
             onClick={generateDraft}
             disabled={draftBusy}
+            title="Cmd/Ctrl+K"
             style={{ ...btnBase, background: "#ff2d8e", color: INK, opacity: draftBusy ? 0.6 : 1 }}
           >
             {draftBusy && <Spinner color={INK} size={12} />}
@@ -668,6 +908,7 @@ function IdeaDetail({ idea, onUpdate, onDelete, onSpawnMore, visions }) {
           <button
             onClick={checkTrends}
             disabled={trendBusy}
+            title="What's trending"
             style={{ ...btnBase, border: "1px solid rgba(242,237,228,0.25)", color: PAPER, background: "transparent", opacity: trendBusy ? 0.6 : 1 }}
           >
             {trendBusy && <Spinner color={PAPER} size={12} />}
@@ -725,7 +966,7 @@ function IdeaDetail({ idea, onUpdate, onDelete, onSpawnMore, visions }) {
               <input
                 value={elaborateNote}
                 onChange={(e) => setElaborateNote(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && elaborate()}
+                onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && elaborate()}
                 placeholder="Tell Claude how to change it — shorter, warmer, add a CTA..."
                 style={{
                   flex: 1,
@@ -743,6 +984,7 @@ function IdeaDetail({ idea, onUpdate, onDelete, onSpawnMore, visions }) {
               <button
                 onClick={elaborate}
                 disabled={elaborateBusy || !elaborateNote.trim()}
+                title="Cmd/Ctrl+Enter"
                 style={{
                   ...btnBase,
                   border: `1px solid ${c.color}`,
@@ -761,6 +1003,7 @@ function IdeaDetail({ idea, onUpdate, onDelete, onSpawnMore, visions }) {
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, paddingTop: 8, flexWrap: "wrap" }}>
             <button
               onClick={() => patch({ stage: idea.stage === "ready" ? "draft" : "ready" })}
+              title="Cmd/Ctrl+S"
               style={{
                 ...btnBase,
                 border: `1px solid ${idea.stage === "ready" ? "#8a9a7e" : "rgba(242,237,228,0.25)"}`,
@@ -792,17 +1035,32 @@ function IdeaDetail({ idea, onUpdate, onDelete, onSpawnMore, visions }) {
 }
 
 // ---------- Brain Dump ----------
-function BrainDump({ onAdd }) {
+function BrainDump({ onAdd, inputRef }) {
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === "d") {
+        e.preventDefault();
+        inputRef.current?.focus();
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key === "Enter" && document.activeElement === inputRef.current) {
+        e.preventDefault();
+        process();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [text, inputRef]);
 
   async function process() {
     if (!text.trim()) return;
     setBusy(true);
     setError("");
     try {
-      const sys = `You take messy, rapid-fire brain-dump text from Kali, an ADHD creative (analogue photographer/filmmaker, "Queen of the Grain" — 35mm, darkroom, film souping, expired stock; also runs a creative-ops consultancy). Split her dump into distinct content ideas — she often has several tangled together. For each, respond with ONLY a JSON array: [{"title": "5-8 word punchy title", "raw": "1-2 sentence clean version of the idea", "channel": "instagram"|"patreon"|"substack"}]. Pick the best-fit channel per idea: Instagram = fast/visual, Patreon = behind-the-scenes/process, Substack = slow/written/considered. If the dump is really just one idea, return an array with 1 item, not 3 padded ones. No markdown, no commentary.`;
+      const sys = `You take messy, rapid-fire brain-dump text from Kali, an ADHD creative (analogue photographer/filmmaker, "Queen of the Grain" — 35mm, darkroom, film souping, expired stock; also runs creative-ops consulting). You split tangled, half-formed ideas into clean separate ideas. You infer channels (instagram, patreon, substack) based on content type and energy. Output as JSON array: [{"channel":"instagram|patreon|substack","raw":"idea in Kali's voice","title":"optional short title"}]. Be specific.`;
       const out = await callClaude([{ role: "user", content: text }], sys, 800);
       const arr = extractJSON(out);
       if (!arr.length) throw new Error("couldn't find any ideas in that — try rephrasing");
@@ -820,20 +1078,24 @@ function BrainDump({ onAdd }) {
         Brain dump → frames
       </div>
       <textarea
+        ref={inputRef}
         value={text}
         onChange={(e) => setText(e.target.value)}
-        placeholder="Dump everything. Half-thoughts, three ideas tangled together, a feeling about a roll of film you just developed — whatever's loud right now. Claude will split it into separate frames and sort them onto the right channel."
+        placeholder="Dump everything. Half-thoughts, three ideas tangled together, a feeling about a roll of film you just developed — whatever's loud right now. Claude will split it into separate frames."
         rows={4}
         style={fieldStyle({ border: "none", fontFamily: SERIF, fontSize: 14, padding: 0, marginBottom: 12 })}
       />
-      <button
-        onClick={process}
-        disabled={busy || !text.trim()}
-        style={{ ...btnBase, background: "#ff2d8e", color: INK, opacity: busy || !text.trim() ? 0.5 : 1, padding: "10px 16px" }}
-      >
-        {busy && <Spinner color={INK} size={12} />}
-        {busy ? "Developing..." : "Develop into frames"}
-      </button>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <button
+          onClick={process}
+          disabled={busy || !text.trim()}
+          style={{ ...btnBase, background: "#ff2d8e", color: INK, opacity: busy || !text.trim() ? 0.5 : 1, padding: "10px 16px" }}
+        >
+          {busy && <Spinner color={INK} size={12} />}
+          {busy ? "Developing..." : "Develop into frames"}
+        </button>
+        <span style={{ fontFamily: MONO, fontSize: 9, color: "rgba(242,237,228,0.3)" }}>or Cmd/Ctrl+Enter</span>
+      </div>
       <ErrorNote message={error} onDismiss={() => setError("")} />
     </div>
   );
@@ -846,17 +1108,27 @@ function App() {
   const [filter, setFilter] = useState("all");
   const [activeId, setActiveId] = useState(null);
   const [showVision, setShowVision] = useState(false);
+  const [showShortcuts, setShowShortcuts] = useState(false);
+  const [showApiModal, setShowApiModal] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [isNarrow, setIsNarrow] = useState(typeof window !== "undefined" ? window.innerWidth < 1024 : false);
+  const brainDumpRef = useRef(null);
 
   useEffect(() => {
     (async () => {
-      const [i, v] = await Promise.all([loadIdeas(), loadVisions()]);
+      const [i, v, activeId] = await Promise.all([loadIdeas(), loadVisions(), loadActiveId()]);
       setIdeas(i);
       setVisions(v);
+      if (activeId && i.find(x => x.id === activeId)) {
+        setActiveId(activeId);
+      }
       setLoaded(true);
     })();
   }, []);
+
+  useEffect(() => {
+    saveActiveId(activeId);
+  }, [activeId]);
 
   useEffect(() => {
     function onResize() {
@@ -865,6 +1137,27 @@ function App() {
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
+
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === "Escape" && (showVision || showShortcuts || showApiModal)) {
+        setShowVision(false);
+        setShowShortcuts(false);
+        setShowApiModal(false);
+      }
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === "?") {
+        e.preventDefault();
+        setShowShortcuts(true);
+      }
+      // Quick filter by number key
+      if (e.key === "1") setFilter("all");
+      if (e.key === "2") setFilter("instagram");
+      if (e.key === "3") setFilter("patreon");
+      if (e.key === "4") setFilter("substack");
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [showVision, showShortcuts, showApiModal]);
 
   function nextFrameNo(list) {
     return list.length ? Math.max(...list.map((i) => i.frameNo)) + 1 : 1;
@@ -938,12 +1231,27 @@ function App() {
             content studio
           </span>
         </div>
-        <button
-          onClick={() => setShowVision(true)}
-          style={{ ...btnBase, border: "1px solid rgba(242,237,228,0.25)", color: PAPER, background: "transparent" }}
-        >
-          Vision &amp; tone
-        </button>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <button
+            onClick={() => setShowVision(true)}
+            style={{ ...btnBase, border: "1px solid rgba(242,237,228,0.25)", color: PAPER, background: "transparent" }}
+          >
+            Vision &amp; tone
+          </button>
+          <button
+            onClick={() => setShowShortcuts(true)}
+            title="Cmd/Ctrl+Shift+?"
+            style={{ ...btnBase, border: "1px solid rgba(242,237,228,0.25)", color: PAPER, background: "transparent", fontSize: 10 }}
+          >
+            ? Help
+          </button>
+          <button
+            onClick={() => setShowApiModal(true)}
+            style={{ ...btnBase, border: "1px solid rgba(242,237,228,0.25)", color: PAPER, background: "transparent", fontSize: 10 }}
+          >
+            ⚙ API Key
+          </button>
+        </div>
       </header>
 
       <div style={{ flex: 1, display: "flex", flexDirection: isNarrow ? "column" : "row", minHeight: 0 }}>
@@ -958,12 +1266,13 @@ function App() {
           }}
         >
           <div style={{ padding: 20 }}>
-            <BrainDump onAdd={addIdeasFromArray} />
+            <BrainDump onAdd={addIdeasFromArray} inputRef={brainDumpRef} />
           </div>
 
           <div style={{ padding: "0 20px 8px", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
             <button
               onClick={() => setFilter("all")}
+              title="Press 1"
               style={{
                 padding: "6px 12px",
                 fontSize: 11,
@@ -1000,49 +1309,70 @@ function App() {
                 Dump a thought above — it'll show up here.
               </div>
             ) : (
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignContent: "flex-start" }}>
                 {filtered.map((idea) => (
-                  <IdeaFrame key={idea.id} idea={idea} isActive={idea.id === activeId} onOpen={() => setActiveId(idea.id)} />
+                  <IdeaFrame
+                    key={idea.id}
+                    idea={idea}
+                    onOpen={() => setActiveId(idea.id)}
+                    isActive={activeId === idea.id}
+                  />
                 ))}
               </div>
             )}
           </div>
         </div>
 
-        <div
-          style={{
-            width: isNarrow ? "100%" : 480,
-            flexShrink: 0,
-            display: "flex",
-            flexDirection: "column",
-            minHeight: isNarrow ? 400 : 0,
-            background: "rgba(242,237,228,0.02)",
-          }}
-        >
-          {active ? (
+        {!isNarrow && active && (
+          <div
+            className="slide-in-panel"
+            style={{
+              width: 400,
+              borderLeft: "1px solid rgba(242,237,228,0.12)",
+              display: "flex",
+              flexDirection: "column",
+              background: INK,
+              overflow: "hidden",
+            }}
+          >
             <IdeaDetail
-              key={active.id}
               idea={active}
-              visions={visions}
               onUpdate={updateIdea}
               onDelete={deleteIdea}
               onSpawnMore={addIdeasFromArray}
+              visions={visions}
+              onClose={() => setActiveId(null)}
             />
-          ) : (
-            <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", padding: 32, textAlign: "center" }}>
-              <div style={{ fontFamily: MONO, fontSize: 12, lineHeight: 1.6, color: "rgba(242,237,228,0.35)" }}>
-                Select a frame to develop it
-                <br />
-                into a draft, or dump a new
-                <br />
-                idea on the left.
-              </div>
-            </div>
-          )}
-        </div>
+          </div>
+        )}
+
+        {isNarrow && active && (
+          <div
+            className="slide-in-panel"
+            style={{
+              position: "fixed",
+              inset: 0,
+              zIndex: 40,
+              display: "flex",
+              background: INK,
+              flexDirection: "column",
+            }}
+          >
+            <IdeaDetail
+              idea={active}
+              onUpdate={updateIdea}
+              onDelete={deleteIdea}
+              onSpawnMore={addIdeasFromArray}
+              visions={visions}
+              onClose={() => setActiveId(null)}
+            />
+          </div>
+        )}
       </div>
 
       {showVision && <VisionRoom visions={visions} setVisions={setVisions} onClose={() => setShowVision(false)} />}
+      {showShortcuts && <ShortcutsHelp onClose={() => setShowShortcuts(false)} />}
+      {showApiModal && <ApiKeyModal onClose={() => setShowApiModal(false)} onSet={() => {}} />}
     </div>
   );
 }
